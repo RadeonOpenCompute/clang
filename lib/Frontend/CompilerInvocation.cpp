@@ -459,6 +459,8 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
     StringRef Name = A->getValue();
     if (Name == "Accelerate")
       Opts.setVecLib(CodeGenOptions::Accelerate);
+    else if (Name == "SVML")
+      Opts.setVecLib(CodeGenOptions::SVML);
     else if (Name == "none")
       Opts.setVecLib(CodeGenOptions::NoLibrary);
     else
@@ -1465,7 +1467,7 @@ static void ParseHeaderSearchArgs(HeaderSearchOptions &Opts, ArgList &Args) {
     Opts.AddVFSOverlayFile(A->getValue());
 }
 
-bool isOpenCL(LangStandard::Kind LangStd) {
+static bool isOpenCL(LangStandard::Kind LangStd) {
   return LangStd == LangStandard::lang_opencl ||
          LangStd == LangStandard::lang_opencl11 ||
          LangStd == LangStandard::lang_opencl12 ||
