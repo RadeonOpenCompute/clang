@@ -35,8 +35,8 @@ llvm::Type *CGOpenCLRuntime::convertOpenCLSpecificType(const Type *T) {
          "Not an OpenCL specific type!");
 
   llvm::LLVMContext& Ctx = CGM.getLLVMContext();
-  uint32_t ImgAddrSpc =
-    CGM.getTargetCodeGenInfo().getOpenCLImageAddrSpace(CGM);
+  uint32_t ImgAddrSpc = CGM.getContext().getTargetAddressSpace(
+    CGM.getTarget().getOpenCLImageAddrSpace());
   switch (cast<BuiltinType>(T)->getKind()) {
   default: 
     llvm_unreachable("Unexpected opencl builtin type!");
@@ -81,7 +81,7 @@ llvm::Type *CGOpenCLRuntime::getPipeType() {
 llvm::PointerType *CGOpenCLRuntime::getSamplerType() {
   if (!SamplerTy)
     SamplerTy = llvm::PointerType::get(llvm::StructType::create(
-      CGM.getLLVMContext(), "__opencl_sampler_t"),
+      CGM.getLLVMContext(), "opencl.sampler_t"),
       CGM.getContext().getTargetAddressSpace(
       LangAS::opencl_constant));
   return SamplerTy;

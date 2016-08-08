@@ -34,19 +34,19 @@ void fnc3(image3d_t img) {}
 // CHECK-AMDGCN: @fnc3(%opencl.image3d_ro_t addrspace(2)*
 
 void fnc4smp(sampler_t s) {}
-// CHECK-SPIR-LABEL: define {{.*}}void @fnc4smp(%__opencl_sampler_t addrspace(2)*
-// CHECK-AMDGCN-LABEL: define {{.*}}void @fnc4smp(%__opencl_sampler_t addrspace(2)*
+// CHECK-SPIR-LABEL: define {{.*}}void @fnc4smp(%opencl.sampler_t addrspace(2)*
+// CHECK-AMDGCN-LABEL: define {{.*}}void @fnc4smp(%opencl.sampler_t addrspace(2)*
 
 kernel void foo(image1d_t img) {
   sampler_t smp = CLK_ADDRESS_CLAMP_TO_EDGE|CLK_NORMALIZED_COORDS_TRUE|CLK_FILTER_LINEAR;
-  // CHECK-SPIR: alloca %__opencl_sampler_t addrspace(2)*
+  // CHECK-SPIR: alloca %opencl.sampler_t addrspace(2)*
   event_t evt;
   // CHECK-SPIR: alloca %opencl.event_t*
-  // CHECK-SPIR: store %__opencl_sampler_t addrspace(2)*
+  // CHECK-SPIR: store %opencl.sampler_t addrspace(2)*
   fnc4smp(smp);
-  // CHECK-SPIR: call {{.*}}void @fnc4smp(%__opencl_sampler_t addrspace(2)*
+  // CHECK-SPIR: call {{.*}}void @fnc4smp(%opencl.sampler_t addrspace(2)*
   fnc4smp(glb_smp);
-  // CHECK-SPIR: call {{.*}}void @fnc4smp(%__opencl_sampler_t addrspace(2)*
+  // CHECK-SPIR: call {{.*}}void @fnc4smp(%opencl.sampler_t addrspace(2)*
 }
 
 void __attribute__((overloadable)) bad1(image1d_t b, image2d_t c, image2d_t d) {}
