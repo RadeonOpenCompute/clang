@@ -606,6 +606,33 @@ of the condition.
   }];
 }
 
+def ConvergentDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+The ``convergent`` attribute can be placed on function declarations. It is
+translated to LLVM ``convergent`` attribute, which indicates the call
+instructions of a function with this attribute cannot be made control-dependent
+on any additional values.
+
+In languages designed for SPMD/SIMT programming model, e.g. OpenCL or CUDA,
+the call instructions of a function with this attribute must be executed by
+all work items or threads in a work group or sub group.
+
+This attribute is different from ``noduplicate`` since it allows duplicating
+function calls if it can be proved that the duplicated function calls are
+not made control-dependent on any additional values, e.g., unrolling a loop
+executed by all work items.
+
+Sample usage:
+.. code-block:: c
+
+  void convfunc() __attribute__((convergent));
+  // Setting it as a C++11 attribute is also valid
+  // void convfunc() [[clang::convergent]];
+
+  }];
+}
+
 def NoSplitStackDocs : Documentation {
   let Category = DocCatFunction;
   let Content = [{
