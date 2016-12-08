@@ -1,5 +1,5 @@
-// RUN: %clang_cc1 %s -cl-std=CL2.0 -include opencl-c.h -triple amdgcn -fno-common -emit-llvm -o - | FileCheck %s
-// RUN: %clang_cc1 %s -O0 -cl-std=CL2.0 -include opencl-c.h -triple amdgcn -fno-common -emit-llvm -o - | FileCheck --check-prefix=NOOPT %s
+// RUN: %clang_cc1 %s -cl-std=CL2.0 -include opencl-c.h -triple amdgcn -emit-llvm -o - | FileCheck %s
+// RUN: %clang_cc1 %s -O0 -cl-std=CL2.0 -include opencl-c.h -triple amdgcn -emit-llvm -o - | FileCheck --check-prefix=NOOPT %s
 
 typedef struct {
   private char *p1;
@@ -123,34 +123,38 @@ void test_func_scope_var(void) {
 
 // Test default initialization of pointers.
 
-// CHECK: @p1 = local_unnamed_addr addrspace(1) global i8* addrspacecast (i8 addrspace(4)* null to i8*), align 4
+// Tentative definition of global variables with non-zero initializer
+// cannot have common linkage since common linkage requires zero initialization
+// and does not have explicit section.
+
+// CHECK: @p1 = weak local_unnamed_addr addrspace(1) global i8* addrspacecast (i8 addrspace(4)* null to i8*), align 4
 private char *p1;
 
-// CHECK: @p2 = local_unnamed_addr addrspace(1) global i8 addrspace(3)* addrspacecast (i8 addrspace(4)* null to i8 addrspace(3)*), align 4
+// CHECK: @p2 = weak local_unnamed_addr addrspace(1) global i8 addrspace(3)* addrspacecast (i8 addrspace(4)* null to i8 addrspace(3)*), align 4
 local char *p2;
 
-// CHECK: @p3 = local_unnamed_addr addrspace(1) global i8 addrspace(2)* null, align 4
+// CHECK: @p3 = common local_unnamed_addr addrspace(1) global i8 addrspace(2)* null, align 4
 constant char *p3;
 
-// CHECK: @p4 = local_unnamed_addr addrspace(1) global i8 addrspace(1)* null, align 4
+// CHECK: @p4 = common local_unnamed_addr addrspace(1) global i8 addrspace(1)* null, align 4
 global char *p4;
 
-// CHECK: @p5 = local_unnamed_addr addrspace(1) global i8 addrspace(4)* null, align 4
+// CHECK: @p5 = common local_unnamed_addr addrspace(1) global i8 addrspace(4)* null, align 4
 generic char *p5;
 
 // Test default initialization of sturcture.
 
-// CHECK: @S1 = local_unnamed_addr addrspace(1) global %struct.StructTy1 { i8* addrspacecast (i8 addrspace(4)* null to i8*), i8 addrspace(3)* addrspacecast (i8 addrspace(4)* null to i8 addrspace(3)*), i8 addrspace(2)* null, i8 addrspace(1)* null, i8 addrspace(4)* null }, align 4
+// CHECK: @S1 = weak local_unnamed_addr addrspace(1) global %struct.StructTy1 { i8* addrspacecast (i8 addrspace(4)* null to i8*), i8 addrspace(3)* addrspacecast (i8 addrspace(4)* null to i8 addrspace(3)*), i8 addrspace(2)* null, i8 addrspace(1)* null, i8 addrspace(4)* null }, align 4
 StructTy1 S1;
 
-// CHECK: @S2 = local_unnamed_addr addrspace(1) global %struct.StructTy2 zeroinitializer, align 4
+// CHECK: @S2 = common local_unnamed_addr addrspace(1) global %struct.StructTy2 zeroinitializer, align 4
 StructTy2 S2;
 
 // Test default initialization of array.
-// CHECK: @A1 = local_unnamed_addr addrspace(1) global [2 x %struct.StructTy1] [%struct.StructTy1 { i8* addrspacecast (i8 addrspace(4)* null to i8*), i8 addrspace(3)* addrspacecast (i8 addrspace(4)* null to i8 addrspace(3)*), i8 addrspace(2)* null, i8 addrspace(1)* null, i8 addrspace(4)* null }, %struct.StructTy1 { i8* addrspacecast (i8 addrspace(4)* null to i8*), i8 addrspace(3)* addrspacecast (i8 addrspace(4)* null to i8 addrspace(3)*), i8 addrspace(2)* null, i8 addrspace(1)* null, i8 addrspace(4)* null }], align 4
+// CHECK: @A1 = weak local_unnamed_addr addrspace(1) global [2 x %struct.StructTy1] [%struct.StructTy1 { i8* addrspacecast (i8 addrspace(4)* null to i8*), i8 addrspace(3)* addrspacecast (i8 addrspace(4)* null to i8 addrspace(3)*), i8 addrspace(2)* null, i8 addrspace(1)* null, i8 addrspace(4)* null }, %struct.StructTy1 { i8* addrspacecast (i8 addrspace(4)* null to i8*), i8 addrspace(3)* addrspacecast (i8 addrspace(4)* null to i8 addrspace(3)*), i8 addrspace(2)* null, i8 addrspace(1)* null, i8 addrspace(4)* null }], align 4
 StructTy1 A1[2];
 
-// CHECK: @A2 = local_unnamed_addr addrspace(1) global [2 x %struct.StructTy2] zeroinitializer, align 4
+// CHECK: @A2 = common local_unnamed_addr addrspace(1) global [2 x %struct.StructTy2] zeroinitializer, align 4
 StructTy2 A2[2];
 
 // Test comparison with 0.
@@ -515,13 +519,16 @@ int test_and_ptr(private char* p1, local char* p2) {
 
 // Test folding of null pointer in function scope.
 // NOOPT-LABEL: test_fold
+// NOOPT: call void @test_fold_callee
 // NOOPT: store i32 addrspace(1)* null, i32 addrspace(1)** %glob, align 4
 // NOOPT: %{{.*}} = sub i64 %{{.*}}, 0
+// NOOPT: call void @test_fold_callee
 // NOOPT: %{{.*}} = add nsw i64 %{{.*}}, -1
 // NOOPT: %{{.*}} = sub nsw i64 %{{.*}}, 1
+void test_fold_callee(void);
 void test_fold(void) {
-  global int* glob = (global int*)(generic char*)0;
+  global int* glob = (test_fold_callee(), (global int*)(generic char*)0);
   long x = glob - (global int*)(generic char*)0;
-  x = x + (int)(private int*)(generic char*)(global short*)0;
+  x = x + (int)(test_fold_callee(), (private int*)(generic char*)(global short*)0);
   x = x - (int)((private int*)0 == (private int*)(generic char*)0);
 }

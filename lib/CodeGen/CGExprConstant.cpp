@@ -1263,8 +1263,8 @@ llvm::Constant *CodeGenModule::EmitConstantExpr(const Expr *E,
   return C;
 }
 
-llvm::Constant *CodeGenModule::getNullPtr(llvm::PointerType *T, QualType QT) {
-  return getTargetCodeGenInfo().getNullPtr(*this, T, QT);
+llvm::Constant *CodeGenModule::getNullPointer(llvm::PointerType *T, QualType QT) {
+  return getTargetCodeGenInfo().getNullPointer(*this, T, QT);
 }
 
 llvm::Constant *CodeGenModule::EmitConstantValue(const APValue &Value,
@@ -1330,8 +1330,8 @@ llvm::Constant *CodeGenModule::EmitConstantValue(const APValue &Value,
       // Convert to the appropriate type; this could be an lvalue for
       // an integer.
       if (auto PT = dyn_cast<llvm::PointerType>(DestTy)) {
-        if (Value.isNullPtr())
-          return getNullPtr(PT, DestType);
+        if (Value.isNullPointer())
+          return getNullPointer(PT, DestType);
         // Convert the integer to a pointer-sized integer before converting it
         // to a pointer.
         C = llvm::ConstantExpr::getIntegerCast(
@@ -1618,7 +1618,7 @@ static llvm::Constant *EmitNullConstantForBase(CodeGenModule &CGM,
 
 llvm::Constant *CodeGenModule::EmitNullConstant(QualType T) {
   if (auto PT = T->getAs<PointerType>())
-    return getNullPtr(cast<llvm::PointerType>(getTypes().ConvertTypeForMem(T)),
+    return getNullPointer(cast<llvm::PointerType>(getTypes().ConvertTypeForMem(T)),
                       T);
 
   if (getTypes().isZeroInitializable(T))

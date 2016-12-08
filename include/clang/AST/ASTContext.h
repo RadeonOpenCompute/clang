@@ -2263,7 +2263,7 @@ public:
 
   /// Get target-dependent integer value for null pointer which is used for
   /// constant folding.
-  uint64_t getTargetNullPtrValue(QualType QT) const;
+  uint64_t getTargetNullPointerValue(QualType QT) const;
 
   bool addressSpaceMapManglingFor(unsigned AS) const {
     return AddrSpaceMapMangling || 

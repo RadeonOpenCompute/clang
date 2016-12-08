@@ -1078,7 +1078,7 @@ namespace {
     unsigned getLValueCallIndex() const { return CallIndex; }
     SubobjectDesignator &getLValueDesignator() { return Designator; }
     const SubobjectDesignator &getLValueDesignator() const { return Designator;}
-    bool isNullPtr() const { return IsNullPtr;}
+    bool isNullPointer() const { return IsNullPtr;}
 
     void moveInto(APValue &V) const {
       if (Designator.Invalid)
@@ -1095,7 +1095,7 @@ namespace {
       InvalidBase = false;
       CallIndex = V.getLValueCallIndex();
       Designator = SubobjectDesignator(Ctx, V);
-      IsNullPtr = V.isNullPtr();
+      IsNullPtr = V.isNullPointer();
     }
 
     void set(APValue::LValueBase B, unsigned I = 0, bool BInvalid = false,
@@ -1147,9 +1147,8 @@ namespace {
       if (checkSubobject(Info, E, Imag ? CSK_Imag : CSK_Real))
         Designator.addComplexUnchecked(EltTy, Imag);
     }
-    void clearIsNullPtr(bool DoIt) {
-      if (DoIt)
-        IsNullPtr = false;
+    void clearIsNullPointer() {
+      IsNullPtr = false;
     }
     void adjustOffsetAndIndex(EvalInfo &Info, const Expr *E, uint64_t Index,
                               CharUnits ElementSize) {
@@ -1157,11 +1156,13 @@ namespace {
       Offset += Index * ElementSize;
       if (Index && checkNullPointer(Info, E, CSK_ArrayIndex))
         Designator.adjustIndex(Info, E, Index);
-      clearIsNullPtr(Index);
+      if (Index)
+        clearIsNullPointer();
     }
     void adjustOffset(CharUnits N) {
       Offset += N;
-      clearIsNullPtr(N.getQuantity());
+      if (N.getQuantity())
+        clearIsNullPointer();
     }
   };
 
@@ -5076,7 +5077,7 @@ public:
     return true;
   }
   bool ZeroInitialization(const Expr *E) {
-    auto Offset = Info.Ctx.getTargetNullPtrValue(E->getType());
+    auto Offset = Info.Ctx.getTargetNullPointerValue(E->getType());
     Result.set((Expr*)nullptr, 0, false, true, Offset);
     return true;
   }
@@ -8356,8 +8357,8 @@ bool IntExprEvaluator::VisitCastExpr(const CastExpr *E) {
     }
 
     uint64_t V;
-    if (LV.isNullPtr())
-      V = Info.Ctx.getTargetNullPtrValue(SrcType);
+    if (LV.isNullPointer())
+      V = Info.Ctx.getTargetNullPointerValue(SrcType);
     else
       V = LV.getLValueOffset().getQuantity();
 
