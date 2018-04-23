@@ -279,6 +279,7 @@ def COnly : LangOpt<"CPlusPlus", 1>;
 def CPlusPlus : LangOpt<"CPlusPlus">;
 def OpenCL : LangOpt<"OpenCL">;
 def RenderScript : LangOpt<"RenderScript">;
+def CPlusPlusAMP : LangOpt<"CPlusPlusAMP">;
 def ObjC : LangOpt<"ObjC1">;
 def BlocksSupported : LangOpt<"Blocks">;
 
@@ -832,6 +833,18 @@ def Const : InheritableAttr {
   let Documentation = [Undocumented];
 }
 
+def HC_HC : InheritableAttr {
+  let Spellings = [CXX11<"","hc", 201511>];
+  let Subjects = SubjectList<[Var, Function], ErrorDiag>;
+  let Documentation = [Undocumented];
+}
+
+def HC_CPU : InheritableAttr {
+  let Spellings = [CXX11<"","cpu", 201511>];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let Documentation = [Undocumented];
+}
+
 def Constructor : InheritableAttr {
   let Spellings = [GCC<"constructor">];
   let Args = [DefaultIntArgument<"Priority", 65535>];
@@ -1364,30 +1377,52 @@ def NoMicroMips : InheritableAttr, TargetSpecificAttr<TargetMips32> {
 // this should be rejected on non-kernels.
 
 def AMDGPUFlatWorkGroupSize : InheritableAttr {
-  let Spellings = [Clang<"amdgpu_flat_work_group_size", 0>];
-  let Args = [UnsignedArgument<"Min">, UnsignedArgument<"Max">];
+  let Spellings = [Clang<"amdgpu_flat_work_group_size">,
+                   CXX11<"","hc_flat_workgroup_size", 201511>];
+  let Args = [ExprArgument<"Min">,
+              ExprArgument<"Max", 1>,
+              StringArgument<"ISA", 1>];
   let Documentation = [AMDGPUFlatWorkGroupSizeDocs];
+  let TemplateDependent = 1;
   let Subjects = SubjectList<[Function], ErrorDiag, "kernel functions">;
 }
 
 def AMDGPUWavesPerEU : InheritableAttr {
-  let Spellings = [Clang<"amdgpu_waves_per_eu", 0>];
-  let Args = [UnsignedArgument<"Min">, UnsignedArgument<"Max", 1>];
+  let Spellings = [Clang<"amdgpu_waves_per_eu">,
+                   CXX11<"", "hc_waves_per_eu", 201511>];
+  let Args = [ExprArgument<"Min">,
+              ExprArgument<"Max", 1>,
+              StringArgument<"ISA", 1>];
   let Documentation = [AMDGPUWavesPerEUDocs];
+  let TemplateDependent = 1;
   let Subjects = SubjectList<[Function], ErrorDiag, "kernel functions">;
 }
 
 def AMDGPUNumSGPR : InheritableAttr {
-  let Spellings = [Clang<"amdgpu_num_sgpr", 0>];
-  let Args = [UnsignedArgument<"NumSGPR">];
+  let Spellings = [Clang<"amdgpu_num_sgpr">];
+  let Args = [ExprArgument<"NumSGPR">];
   let Documentation = [AMDGPUNumSGPRNumVGPRDocs];
+  let TemplateDependent = 1;
   let Subjects = SubjectList<[Function], ErrorDiag, "kernel functions">;
 }
 
 def AMDGPUNumVGPR : InheritableAttr {
-  let Spellings = [Clang<"amdgpu_num_vgpr", 0>];
-  let Args = [UnsignedArgument<"NumVGPR">];
+  let Spellings = [Clang<"amdgpu_num_vgpr">];
+  let Args = [ExprArgument<"NumVGPR">];
   let Documentation = [AMDGPUNumSGPRNumVGPRDocs];
+  let Subjects = SubjectList<[Function], ErrorDiag, "kernel functions">;
+  let TemplateDependent = 1;
+}
+
+def AMDGPUMaxWorkGroupDim : InheritableAttr {
+  let Spellings = [CXX11<"","hc_max_workgroup_dim", 201511>];
+  let Args = [ExprArgument<"X">,
+              ExprArgument<"Y">,
+              ExprArgument<"Z">,
+              StringArgument<"ISA", 1>];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let Documentation = [Undocumented];
+  let TemplateDependent = 1;
   let Subjects = SubjectList<[Function], ErrorDiag, "kernel functions">;
 }
 
@@ -2876,4 +2911,34 @@ def InternalLinkage : InheritableAttr {
   let Spellings = [Clang<"internal_linkage">];
   let Subjects = SubjectList<[Var, Function, CXXRecord]>;
   let Documentation = [InternalLinkageDocs];
+}
+
+// C++AMP attributes
+
+def CXXAMPRestrictAMP : InheritableAttr {
+  let Spellings = [GNU<"amp">, GNU<"hc">];
+  let Documentation = [Undocumented];
+}
+
+def CXXAMPRestrictAUTO : InheritableAttr {
+  let Spellings = [GNU<"auto">];
+  let Documentation = [Undocumented];
+}
+
+def CXXAMPRestrictCPU : InheritableAttr {
+  let Spellings = [GNU<"cpu">];
+  let Documentation = [Undocumented];
+}
+
+def HCGridLaunch : InheritableAttr {
+  let Spellings = [GNU<"hc_grid_launch">, CXX11<"", "hc_grid_launch", 201511>];
+  let Subjects = SubjectList<[Function]>;
+  let Documentation = [Undocumented];
+}
+
+def HCCTileStatic : InheritableAttr {
+  let Spellings = [GNU<"tile_static">];
+  let Subjects = SubjectList<[Var]>;
+  let LangOpts = [CPlusPlusAMP];
+  let Documentation = [Undocumented];
 }

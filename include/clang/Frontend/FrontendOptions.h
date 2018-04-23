@@ -156,6 +156,8 @@ public:
     ///@{ Languages that the frontend can parse and compile.
     C,
     CXX,
+	CXXAMP,
+
     ObjC,
     ObjCXX,
     OpenCL,
@@ -428,7 +430,7 @@ public:
   /// (in the format produced by -fdump-record-layouts).
   std::string OverrideRecordLayoutsFile;
 
-  /// \brief Auxiliary triple for CUDA compilation.
+  /// \brief Auxiliary triple for CUDA and HCC compilation.
   std::string AuxTriple;
 
   /// \brief If non-empty, search the pch input file as if it was a header

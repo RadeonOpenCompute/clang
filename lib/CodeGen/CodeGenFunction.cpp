@@ -14,6 +14,7 @@
 #include "CodeGenFunction.h"
 #include "CGBlocks.h"
 #include "CGCleanup.h"
+#include "CGAMPRuntime.h"
 #include "CGCUDARuntime.h"
 #include "CGCXXABI.h"
 #include "CGDebugInfo.h"
@@ -51,6 +52,10 @@ static bool shouldEmitLifetimeMarkers(const CodeGenOptions &CGOpts,
   // Disable lifetime markers in msan builds.
   // FIXME: Remove this when msan works with lifetime markers.
   if (LangOpts.Sanitize.has(SanitizerKind::Memory))
+    return false;
+
+  // Disable lifetime markers in HCC kernel build
+  if (LangOpts.CPlusPlusAMP && CGOpts.AMPIsDevice)
     return false;
 
   // Asan uses markers for use-after-scope checks.
@@ -712,7 +717,8 @@ static void GenOpenCLArgMetadata(const FunctionDecl *FD, llvm::Function *Fn,
                   llvm::MDNode::get(Context, argBaseTypeNames));
   Fn->setMetadata("kernel_arg_type_qual",
                   llvm::MDNode::get(Context, argTypeQuals));
-  if (CGM.getCodeGenOpts().EmitOpenCLArgMetadata)
+  if (CGM.getCodeGenOpts().EmitOpenCLArgMetadata ||
+      CGM.getLangOpts().CPlusPlusAMP)
     Fn->setMetadata("kernel_arg_name",
                     llvm::MDNode::get(Context, argNames));
 }
@@ -838,7 +844,25 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
   FnRetTy = RetTy;
   CurFn = Fn;
   CurFnInfo = &FnInfo;
-  assert(CurFn->isDeclaration() && "Function already has body?");
+
+  // Relax duplicated function definition for C++AMP
+  //
+  // The reason is because in the modified GPU build path, both CPU and GPU
+  // codes would be emitted in order to make sure C++ name mangling for
+  // GPU kernels work correctly.  CPU codes would be removed in a later
+  // optimization pass.
+  //
+  // Therefore, in the following case StartFunction() might be called twice
+  // for function foo(), and thus we need to relax the assert check for C++AMP.
+  //
+  // void foo() restrict(amp) { return 1; }
+  // void foo() restrict(cpu) { return 2; }
+
+  if (getContext().getLangOpts().CPlusPlusAMP &&
+      (CGM.getCodeGenOpts().AMPIsDevice || CGM.getCodeGenOpts().AMPCPU)) {
+  } else {
+    assert(CurFn->isDeclaration() && "Function already has body?");
+  }
 
   // If this function has been blacklisted for any of the enabled sanitizers,
   // disable the sanitizer for the function.
@@ -868,6 +892,10 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
       if (mask & SanitizerKind::KernelHWAddress)
         SanOpts.set(SanitizerKind::HWAddress, false);
     }
+
+    // Device code has all sanitizers disabled for now
+      if (D->hasAttr<CXXAMPRestrictAMPAttr>())
+         SanOpts.clear();
   }
 
   // Apply sanitizer attributes to the function.
@@ -947,6 +975,19 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
     // Add metadata for a kernel function.
     if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(D))
       EmitOpenCLKernelMetadata(FD, Fn);
+  }
+
+  if (getLangOpts().CPlusPlusAMP && getLangOpts().DevicePath) {
+    if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(D)) {
+      if (FD->hasAttr<AnnotateAttr>() &&
+        FD->getAttr<AnnotateAttr>()->getAnnotation() ==
+          "__HIP_global_function__") {
+            Fn->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
+            Fn->setDoesNotRecurse();
+            Fn->setDoesNotThrow();
+            Fn->setLinkage(llvm::Function::LinkageTypes::WeakODRLinkage);
+      }
+    }
   }
 
   // If we are checking function types, emit a function type signature as
@@ -1341,6 +1382,25 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
     EmitDestructorBody(Args);
   else if (isa<CXXConstructorDecl>(FD))
     EmitConstructorBody(Args);
+  else if (getContext().getLangOpts().CPlusPlusAMP &&
+           CGM.getCodeGenOpts().AMPIsDevice &&
+           FD->hasAttr<AnnotateAttr>() &&
+           FD->getAttr<AnnotateAttr>()->getAnnotation() == "__cxxamp_trampoline")
+    CGM.getAMPRuntime().EmitTrampolineBody(*this, FD, Args);
+  else if (getContext().getLangOpts().CPlusPlusAMP &&
+           (!CGM.getCodeGenOpts().AMPIsDevice || CGM.getCodeGenOpts().AMPCPU)&&
+           FD->hasAttr<AnnotateAttr>() &&
+           FD->getAttr<AnnotateAttr>()->getAnnotation() == "__cxxamp_trampoline_name")
+    CGM.getAMPRuntime().EmitTrampolineNameBody(*this, FD, Args);
+  else if (getContext().getLangOpts().CPlusPlusAMP &&
+           !getContext().getLangOpts().DevicePath &&
+           FD->hasAttr<AnnotateAttr>() &&
+           FD->getAttr<AnnotateAttr>()->getAnnotation() ==
+             "__HIP_global_function__") {
+    // We do not emit __global__ functions on the host path, we only want them
+    // to have a correct address which we can use to obtain the mangled name
+    // from the ELF.
+  }
   else if (getLangOpts().CUDA &&
            !getLangOpts().CUDAIsDevice &&
            FD->hasAttr<CUDAGlobalAttr>())
@@ -1367,7 +1427,8 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
   // C11 6.9.1p12:
   //   If the '}' that terminates a function is reached, and the value of the
   //   function call is used by the caller, the behavior is undefined.
-  if (getLangOpts().CPlusPlus && !FD->hasImplicitReturnZero() && !SawAsmBlock &&
+  // Relax the rule for C++AMP
+  if (!getLangOpts().CPlusPlusAMP && getLangOpts().CPlusPlus && !FD->hasImplicitReturnZero() && !SawAsmBlock &&
       !FD->getReturnType()->isVoidType() && Builder.GetInsertBlock()) {
     bool ShouldEmitUnreachable =
         CGM.getCodeGenOpts().StrictReturn ||
@@ -1824,7 +1885,7 @@ CodeGenFunction::EmitNullInitialization(Address DestPtr, QualType Ty) {
                                NullConstant, Twine());
     CharUnits NullAlign = DestPtr.getAlignment();
     NullVariable->setAlignment(NullAlign.getQuantity());
-    Address SrcPtr(Builder.CreateBitCast(NullVariable, Builder.getInt8PtrTy()),
+    Address SrcPtr(Builder.CreateBitCast(NullVariable, Builder.getInt8PtrTy(4)),
                    NullAlign);
 
     if (vla) return emitNonZeroVLAInit(*this, Ty, DestPtr, SrcPtr, SizeVal);

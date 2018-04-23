@@ -7213,6 +7213,11 @@ static void processTypeAttrs(TypeProcessingState &state, QualType &type,
           << attr.getName();
       break;
 
+    case AttributeList::AT_HC_CPU:
+    case AttributeList::AT_HC_HC:
+    case AttributeList::AT_AMDGPUWavesPerEU:
+    case AttributeList::AT_AMDGPUFlatWorkGroupSize:
+    case AttributeList::AT_AMDGPUMaxWorkGroupDim:
     case AttributeList::IgnoredAttribute:
       break;
 

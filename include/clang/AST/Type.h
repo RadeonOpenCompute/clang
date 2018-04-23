@@ -488,7 +488,11 @@ public:
         // Otherwise in OpenCLC v2.0 s6.5.5: every address space except
         // for __constant can be used as __generic.
         (getAddressSpace() == LangAS::opencl_generic &&
-         other.getAddressSpace() != LangAS::opencl_constant);
+         other.getAddressSpace() != LangAS::opencl_constant) ||
+        // HCC
+        // default address space is superset of tile_static address space
+        ((getAddressSpace() == LangAS::Default) &&
+         (other.getAddressSpace() == LangAS::hcc_tilestatic));
   }
 
   /// Determines if these qualifiers compatibly include another set.
@@ -2180,6 +2184,12 @@ public:
   CanQualType getCanonicalTypeUnqualified() const; // in CanonicalType.h
   void dump() const;
   void dump(llvm::raw_ostream &OS) const;
+
+  friend class ASTReader;
+  friend class ASTWriter;
+
+  /// \brief True if object is of hc::array or Concurrency:type
+  bool isGPUArrayType() const;
 };
 
 /// \brief This will check for a TypedefType by removing any existing sugar

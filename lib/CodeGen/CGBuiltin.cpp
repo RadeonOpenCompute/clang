@@ -2876,7 +2876,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
   case Builtin::BI__GetExceptionInfo: {
     if (llvm::GlobalVariable *GV =
             CGM.getCXXABI().getThrowInfo(FD->getParamDecl(0)->getType()))
-      return RValue::get(llvm::ConstantExpr::getBitCast(GV, CGM.Int8PtrTy));
+      return RValue::get(llvm::ConstantExpr::getPointerCast(GV, CGM.Int8PtrTy));
     break;
   }
 
@@ -3317,7 +3317,9 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     return RValue::get(Builder.CreateFPExt(HalfVal, Builder.getFloatTy()));
   }
   case Builtin::BIprintf:
-    if (getTarget().getTriple().isNVPTX())
+    if (getTarget().getTriple().isNVPTX() ||
+        (getTarget().getTriple().getArch() == Triple::amdgcn &&
+         getLangOpts().CUDA))
       return EmitNVPTXDevicePrintfCallExpr(E, ReturnValue);
     break;
   case Builtin::BI__builtin_canonicalize:

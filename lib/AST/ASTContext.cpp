@@ -759,7 +759,10 @@ static const LangASMap *getAddressSpaceMap(const TargetInfo &T,
       4, // opencl_generic
       5, // cuda_device
       6, // cuda_constant
-      7  // cuda_shared
+      7, // cuda_shared
+      8, // hcc_tilestatic
+      9, // hcc_generic
+      10, // hcc_global
     };
     return &FakeAddrSpaceMap;
   } else {
@@ -9266,6 +9269,8 @@ static GVALinkage adjustGVALinkageForAttributes(const ASTContext &Context,
     // visible externally so they can be launched from host.
     if (L == GVA_DiscardableODR || L == GVA_Internal)
       return GVA_StrongODR;
+  } else if (Context.getLangOpts().CPlusPlusAMP && Context.getLangOpts().DevicePath && D->hasAttr<AnnotateAttr>() && (D->getAttr<AnnotateAttr>()->getAnnotation() == "__cxxamp_trampoline")) {
+    return GVA_StrongODR;
   }
   return L;
 }
@@ -9976,6 +9981,19 @@ unsigned ASTContext::getTargetAddressSpace(LangAS AS) const {
     return toTargetAddressSpace(AS);
   else
     return (*AddrSpaceMap)[(unsigned)AS];
+}
+
+unsigned ASTContext::getTargetAddressSpace(QualType T) const {
+  if (T.isNull())
+    return 0;
+  if (T->isFunctionType() &&
+      !T.getQualifiers().hasAddressSpace())
+    return 0;
+  return getTargetAddressSpace(T.getQualifiers());
+}
+
+unsigned ASTContext::getTargetAddressSpace(Qualifiers Q) const {
+  return getTargetAddressSpace(Q.getAddressSpace());
 }
 
 // Explicitly instantiate this in case a Redeclarable<T> is used from a TU that
