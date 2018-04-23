@@ -96,6 +96,11 @@ llvm::Type *CodeGenTypes::ConvertTypeForMem(QualType T) {
                                 (unsigned)Context.getTypeSize(T));
 }
 
+llvm::PointerType *CodeGenTypes::getVariableType(VarDecl D) {
+  auto Ty = D.getType();
+  return ConvertTypeForMem(Ty)->getPointerTo(
+      getContext().getTargetAddressSpace(Ty));
+}
 
 /// isRecordLayoutComplete - Return true if the specified type is already
 /// completely laid out.
@@ -377,6 +382,14 @@ llvm::Type *CodeGenTypes::ConvertFunctionType(QualType QFT,
     while (!DeferredRecords.empty())
       ConvertRecordDeclType(DeferredRecords.pop_back_val());
   return ResultType;
+}
+
+llvm::PointerType *CodeGenTypes::getPointerTypeTo(QualType T) {
+  return ConvertType(T)->getPointerTo(Context.getTargetAddressSpace(T));
+}
+
+llvm::PointerType *CodeGenTypes::getDefaultPointerTo(llvm::Type *T) {
+  return T->getPointerTo();
 }
 
 /// ConvertType - Convert the specified type to its LLVM form.

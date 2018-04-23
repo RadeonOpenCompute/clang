@@ -682,7 +682,8 @@ void EmitAssemblyHelper::CreatePasses(legacy::PassManager &MPM,
   PMBuilder.populateModulePassManager(MPM);
 }
 
-static void setCommandLineOpts(const CodeGenOptions &CodeGenOpts) {
+static void setCommandLineOpts(const CodeGenOptions &CodeGenOpts,
+                               const LangOptions &LangOpts) {
   SmallVector<const char *, 16> BackendArgs;
   BackendArgs.push_back("clang"); // Fake program name.
   if (!CodeGenOpts.DebugPass.empty()) {
@@ -692,6 +693,14 @@ static void setCommandLineOpts(const CodeGenOptions &CodeGenOpts) {
   if (!CodeGenOpts.LimitFloatPrecision.empty()) {
     BackendArgs.push_back("-limit-float-precision");
     BackendArgs.push_back(CodeGenOpts.LimitFloatPrecision.c_str());
+  }
+  // Disable loop vectorization in HCC kernel compilation path
+  if (LangOpts.CPlusPlusAMP && CodeGenOpts.AMPIsDevice) {
+    for (unsigned i = 0, e = BackendArgs.size(); i != e; ++i)
+      if (strcmp(BackendArgs[i], "-vectorize-loops") == 0) {
+          BackendArgs.erase(BackendArgs.begin() + i);
+          break;
+      }
   }
   BackendArgs.push_back(nullptr);
   llvm::cl::ParseCommandLineOptions(BackendArgs.size() - 1,
@@ -766,7 +775,7 @@ void EmitAssemblyHelper::EmitAssembly(BackendAction Action,
                                       std::unique_ptr<raw_pwrite_stream> OS) {
   TimeRegion Region(llvm::TimePassesIsEnabled ? &CodeGenerationTime : nullptr);
 
-  setCommandLineOpts(CodeGenOpts);
+  setCommandLineOpts(CodeGenOpts, LangOpts);
 
   bool UsesCodeGen = (Action != Backend_EmitNothing &&
                       Action != Backend_EmitBC &&
@@ -911,7 +920,7 @@ static PassBuilder::OptimizationLevel mapToLevel(const CodeGenOptions &Opts) {
 void EmitAssemblyHelper::EmitAssemblyWithNewPassManager(
     BackendAction Action, std::unique_ptr<raw_pwrite_stream> OS) {
   TimeRegion Region(llvm::TimePassesIsEnabled ? &CodeGenerationTime : nullptr);
-  setCommandLineOpts(CodeGenOpts);
+  setCommandLineOpts(CodeGenOpts, LangOpts);
 
   // The new pass manager always makes a target machine available to passes
   // during construction.
@@ -1117,7 +1126,7 @@ static void runThinLTOBackend(ModuleSummaryIndex *CombinedIndex, Module *M,
       ModuleToDefinedGVSummaries;
   CombinedIndex->collectDefinedGVSummariesPerModule(ModuleToDefinedGVSummaries);
 
-  setCommandLineOpts(CGOpts);
+  setCommandLineOpts(CGOpts, LOpts);
 
   // We can simply import the values mentioned in the combined index, since
   // we should only invoke this using the individual indexes written out
@@ -1267,7 +1276,7 @@ void clang::EmitBackendOutput(DiagnosticsEngine &Diags,
   EmitAssemblyHelper AsmHelper(Diags, HeaderOpts, CGOpts, TOpts, LOpts, M);
 
   if (SetLLVMOpts)
-    setCommandLineOpts(CGOpts);
+    setCommandLineOpts(CGOpts, LOpts);
   AsmHelper.setTarget(Action);
 
   if (CGOpts.ExperimentalNewPassManager)
@@ -1297,7 +1306,7 @@ void clang::PerformPrelinkPasses(DiagnosticsEngine &Diags,
   EmitAssemblyHelper AsmHelper(Diags, HeaderSearchOpts, CGOpts, TOpts, LOpts,
                                M);
 
-  setCommandLineOpts(CGOpts);
+  setCommandLineOpts(CGOpts, LOpts);
   AsmHelper.setTarget(Action);
   AsmHelper.DoPreLinkPasses();
 }

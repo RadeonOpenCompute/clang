@@ -146,6 +146,7 @@ static const DriverSuffix *FindDriverSuffix(StringRef ProgName, size_t &Pos) {
       {"clang-g++", "--driver-mode=g++"},
       {"clang-gcc", nullptr},
       {"clang-cl", "--driver-mode=cl"},
+      {"hcc", "--driver-mode=g++"},
       {"cc", nullptr},
       {"cpp", "--driver-mode=cpp"},
       {"cl", "--driver-mode=cl"},
@@ -406,8 +407,9 @@ bool ToolChain::needsProfileRT(const ArgList &Args) {
 }
 
 Tool *ToolChain::SelectTool(const JobAction &JA) const {
-  if (getDriver().ShouldUseClangCompiler(JA)) return getClang();
   Action::ActionClass AC = JA.getKind();
+
+  if (getDriver().ShouldUseClangCompiler(JA)) return getClang();
   if (AC == Action::AssembleJobClass && useIntegratedAs())
     return getClangAs();
   return getTool(AC);
@@ -822,6 +824,9 @@ SanitizerMask ToolChain::getSupportedSanitizers() const {
 
 void ToolChain::AddCudaIncludeArgs(const ArgList &DriverArgs,
                                    ArgStringList &CC1Args) const {}
+
+void ToolChain::AddHCCIncludeArgs(const ArgList &DriverArgs,
+                                  ArgStringList &CC1Args) const {}
 
 void ToolChain::AddIAMCUIncludeArgs(const ArgList &DriverArgs,
                                     ArgStringList &CC1Args) const {}

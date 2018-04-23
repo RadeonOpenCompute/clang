@@ -729,6 +729,7 @@ void PrintPreambleAction::ExecuteAction() {
   switch (getCurrentFileKind().getLanguage()) {
   case InputKind::C:
   case InputKind::CXX:
+  case InputKind::CXXAMP:
   case InputKind::ObjC:
   case InputKind::ObjCXX:
   case InputKind::OpenCL:

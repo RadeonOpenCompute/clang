@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CodeGenModule.h"
+#include "CGAMPRuntime.h"
 #include "CGBlocks.h"
 #include "CGCUDARuntime.h"
 #include "CGCXXABI.h"
@@ -48,6 +49,7 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/CallSite.h"
 #include "llvm/IR/CallingConv.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
@@ -56,6 +58,8 @@
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MD5.h"
+
+#include <unordered_map>
 
 using namespace clang;
 using namespace CodeGen;
@@ -132,6 +136,8 @@ CodeGenModule::CodeGenModule(ASTContext &C, const HeaderSearchOptions &HSO,
     createOpenMPRuntime();
   if (LangOpts.CUDA)
     createCUDARuntime();
+  if (LangOpts.CPlusPlusAMP)
+    createAMPRuntime();
 
   // Enable TBAA unless it's suppressed. ThreadSanitizer needs TBAA even at O0.
   if (LangOpts.Sanitize.has(SanitizerKind::Thread) ||
@@ -217,6 +223,10 @@ void CodeGenModule::createOpenMPRuntime() {
 
 void CodeGenModule::createCUDARuntime() {
   CUDARuntime.reset(CreateNVCUDARuntime(*this));
+}
+
+void CodeGenModule::createAMPRuntime() {
+  AMPRuntime.reset(CreateAMPRuntime(*this));
 }
 
 void CodeGenModule::addReplacement(StringRef Name, llvm::Constant *C) {
@@ -425,7 +435,11 @@ void CodeGenModule::Release() {
   }
   EmitCtorList(GlobalCtors, "llvm.global_ctors");
   EmitCtorList(GlobalDtors, "llvm.global_dtors");
-  EmitGlobalAnnotations();
+  // skip global annotation for HCC kernel path
+  if (Context.getLangOpts().CPlusPlusAMP && getCodeGenOpts().AMPIsDevice) {
+  } else {
+    EmitGlobalAnnotations();
+  }
   EmitStaticExternCAliases();
   EmitDeferredUnusedCoverageMappings();
   if (CoverageMapping)
@@ -1055,7 +1069,7 @@ void CodeGenModule::EmitCtorList(CtorList &Fns, const char *GlobalName) {
     ctor.addInt(Int32Ty, I.Priority);
     ctor.add(llvm::ConstantExpr::getBitCast(I.Initializer, CtorPFTy));
     if (I.AssociatedData)
-      ctor.add(llvm::ConstantExpr::getBitCast(I.AssociatedData, VoidPtrTy));
+      ctor.add(llvm::ConstantExpr::getPointerCast(I.AssociatedData, VoidPtrTy));
     else
       ctor.addNullPointer(VoidPtrTy);
     ctor.finishAndAddTo(ctors);
@@ -1109,6 +1123,17 @@ void CodeGenModule::SetLLVMFunctionAttributes(const Decl *D,
   ConstructAttributeList(F->getName(), Info, D, PAL, CallingConv, false);
   F->setAttributes(PAL);
   F->setCallingConv(static_cast<llvm::CallingConv::ID>(CallingConv));
+
+  // HCC-specific
+  if (D) {
+    llvm::AttrBuilder B;
+    if (D->hasAttr<HCGridLaunchAttr>()) {
+      // hc_grid_launch attribute implies noinline and will win over always_inline
+      B.addAttribute("hc_grid_launch");
+      B.addAttribute(llvm::Attribute::NoInline);
+    }
+    F->addAttributes(llvm::AttributeList::FunctionIndex, B);
+  }
 }
 
 /// Determines whether the language options require us to model
@@ -1447,6 +1472,18 @@ void CodeGenModule::SetFunctionAttributes(GlobalDecl GD, llvm::Function *F,
 
   if (const SectionAttr *SA = FD->getAttr<SectionAttr>())
     F->setSection(SA->getName());
+
+  // Prevent barrier functions be duplicated
+  // Set C++AMP kernels carry AMDGPU_KERNEL calling convention
+  if (getLangOpts().OpenCL ||
+      (getLangOpts().CPlusPlusAMP && CodeGenOpts.AMPIsDevice)) {
+      if (F->getName()=="amp_barrier") {
+          F->addFnAttr(llvm::Attribute::NoDuplicate);
+          F->addFnAttr(llvm::Attribute::NoUnwind);
+      }
+      if (FD->hasAttr<OpenCLKernelAttr>())
+          F->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
+  }
 
   if (FD->isReplaceableGlobalAllocationFunction()) {
     // A replaceable global allocation function does not act like a builtin by
@@ -1792,10 +1829,13 @@ llvm::Constant *CodeGenModule::EmitAnnotateAttr(llvm::GlobalValue *GV,
                  *LineNoCst = EmitAnnotationLineNo(L);
 
   // Create the ConstantStruct for the global annotation.
+  unsigned AS = GV->getType()->getAddressSpace();
+  llvm::PointerType *I8PTy = (AS == Int8PtrTy->getAddressSpace()) ?
+    Int8PtrTy : Int8Ty->getPointerTo(AS);
   llvm::Constant *Fields[4] = {
-    llvm::ConstantExpr::getBitCast(GV, Int8PtrTy),
-    llvm::ConstantExpr::getBitCast(AnnoGV, Int8PtrTy),
-    llvm::ConstantExpr::getBitCast(UnitGV, Int8PtrTy),
+    llvm::ConstantExpr::getPointerCast(GV, I8PTy),
+    llvm::ConstantExpr::getPointerCast(AnnoGV, I8PTy),
+    llvm::ConstantExpr::getPointerCast(UnitGV, I8PTy),
     LineNoCst
   };
   return llvm::ConstantStruct::getAnon(Fields);
@@ -1955,7 +1995,7 @@ ConstantAddress CodeGenModule::GetWeakRefReference(const ValueDecl *VD) {
   llvm::GlobalValue *Entry = GetGlobalValue(AA->getAliasee());
   if (Entry) {
     unsigned AS = getContext().getTargetAddressSpace(VD->getType());
-    auto Ptr = llvm::ConstantExpr::getBitCast(Entry, DeclTy->getPointerTo(AS));
+    auto Ptr = llvm::ConstantExpr::getPointerCast(Entry, DeclTy->getPointerTo(AS));
     return ConstantAddress(Ptr, Alignment);
   }
 
@@ -2025,6 +2065,28 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
       if (MustBeEmitted(Global))
         EmitOMPDeclareReduction(DRD);
       return;
+    }
+  }
+
+  // If this is C++AMP, be selective about which declarations we emit.
+  if (LangOpts.CPlusPlusAMP && !CodeGenOpts.AMPCPU) {
+    if (CodeGenOpts.AMPIsDevice) {
+      // If -famp-is-device switch is on, we are in GPU build path.
+      // Since we will emit both CPU codes and GPU codes to make C++ mangling
+      // algorithm happy, we won't reject anything other than ones with only
+      // restrict(cpu).  Another optimization pass will remove all CPU codes.
+      if (!Global->hasAttr<CXXAMPRestrictAMPAttr>() &&
+         Global->hasAttr<CXXAMPRestrictCPUAttr>())
+        return;
+    } else {
+      // In host path:
+      // let file-scope global variables be emitted
+      // let functions qualifired with restrict(amp) or [[hc]],
+      // but not with restrict(cpu) or [[cpu]] not be emitted
+      if (!isa<VarDecl>(Global) &&
+          Global->hasAttr<CXXAMPRestrictAMPAttr>() &&
+          !Global->hasAttr<CXXAMPRestrictCPUAttr>())
+        return;
     }
   }
 
@@ -2267,10 +2329,112 @@ bool CodeGenModule::shouldOpportunisticallyEmitVTables() {
   return CodeGenOpts.OptimizationLevel > 0;
 }
 
+namespace
+{
+  class HCCompatible {
+    // TODO: this does not yet include the actual checking of function bodies.
+    std::unordered_map<const Decl*, bool> d_;
+
+    bool allowed_(const VarDecl* x)
+    {
+      if (!x) return true;
+      if (d_.count(x)) return d_[x];
+
+      bool r = true;
+
+      if (!x->hasAttr<HCCTileStaticAttr>() &&
+          (x->isStaticLocal() ||
+          x->hasExternalStorage() ||
+          x->hasGlobalStorage() ||
+          x->isExceptionVariable()))  {
+            r = false;
+      }
+
+      d_[x] = r;
+
+      return r;
+    }
+
+    bool allowed_(const FunctionDecl* x)
+    {
+      if (!x) return true;
+      if (d_.count(x)) return d_[x];
+
+      bool r = true;
+
+      if (x->isVariadic()) r = false;
+      if (x->isPure() || x->isVirtualAsWritten()) r = false;
+
+      d_[x] = r;
+
+      return r;
+    }
+
+    bool allowed_(const CXXRecordDecl* x)
+    {
+      if (!x) return true;
+      if (d_.count(x)) return d_[x];
+
+      bool r = true;
+
+      if (x->isPolymorphic()) r = false;
+
+      d_[x] = r;
+
+      return r;
+    }
+  public:
+    bool operator()(const Decl* x)
+    {
+      if (!x || x->hasAttr<CXXAMPRestrictAMPAttr>()) return true;
+
+      if (d_.count(x)) return d_[x];
+      if (d_.count(x->getNonClosureContext()) &&
+          !d_[x->getNonClosureContext()]) {
+        d_[x] = false;
+        return false;
+      }
+
+      bool r = true;
+
+      if (isa<VarDecl>(x)) r = allowed_(cast<VarDecl>(x));
+      else if (isa<FunctionDecl>(x)) {
+        r = allowed_(cast<FunctionDecl>(x));
+      }
+      else if (isa<CXXRecordDecl>(x)) {
+        r = allowed_(cast<CXXRecordDecl>(x));
+      }
+
+      d_[x] = r;
+
+      return r;
+    }
+  };
+}
+
+static bool isWhiteListForHCC(CodeGenModule &CGM, GlobalDecl GD) {
+  static HCCompatible r;
+
+  return r(GD.getDecl());
+}
+
 void CodeGenModule::EmitGlobalDefinition(GlobalDecl GD, llvm::GlobalValue *GV) {
   const auto *D = cast<ValueDecl>(GD.getDecl());
 
-  PrettyStackTraceDecl CrashInfo(const_cast<ValueDecl *>(D), D->getLocation(),
+  // If this is C++AMP, be selective about which declarations we emit.
+  if (LangOpts.CPlusPlusAMP && !CodeGenOpts.AMPCPU) {
+    if (CodeGenOpts.AMPIsDevice) {
+      // If -famp-is-device switch is on, we are in GPU build path.
+      if (!isWhiteListForHCC(*this, GD)) return;
+    }
+    else if (!isa<VarDecl>(D) &&
+      D->hasAttr<CXXAMPRestrictAMPAttr>() &&
+      !D->hasAttr<CXXAMPRestrictCPUAttr>()) {
+      return;
+    }
+  }
+
+  PrettyStackTraceDecl CrashInfo(const_cast<ValueDecl *>(D), D->getLocation(), 
                                  Context.getSourceManager(),
                                  "Generating code for declaration");
 
@@ -2382,7 +2546,7 @@ CodeGenModule::GetOrCreateMultiVersionIFunc(GlobalDecl GD, llvm::Type *DeclTy,
 /// GetOrCreateLLVMFunction - If the specified mangled name is not in the
 /// module, create and return an llvm Function with the specified type. If there
 /// is something in the module with the specified name, return it potentially
-/// bitcasted to the right type.
+/// casted to the right type.
 ///
 /// If D is non-null, it specifies a decl that correspond to this.  This is used
 /// to set the attributes on the function when it is first created.
@@ -2423,21 +2587,27 @@ llvm::Constant *CodeGenModule::GetOrCreateLLVMFunction(
       setDSOLocal(Entry);
     }
 
-    // If there are two attempts to define the same mangled name, issue an
-    // error.
-    if (IsForDefinition && !Entry->isDeclaration()) {
-      GlobalDecl OtherGD;
-      // Check that GD is not yet in DiagnosedConflictingDefinitions is required
-      // to make sure that we issue an error only once.
-      if (lookupRepresentativeDecl(MangledName, OtherGD) &&
-          (GD.getCanonicalDecl().getDecl() !=
-           OtherGD.getCanonicalDecl().getDecl()) &&
-          DiagnosedConflictingDefinitions.insert(GD).second) {
-        getDiags().Report(D->getLocation(),
-                          diag::err_duplicate_mangled_name);
-        getDiags().Report(OtherGD.getDecl()->getLocation(),
-                          diag::note_previous_definition);
+
+    // Relax the rule for C++AMP
+    if (!LangOpts.CPlusPlusAMP) {
+
+      // If there are two attempts to define the same mangled name, issue an
+      // error.
+      if (IsForDefinition && !Entry->isDeclaration()) {
+        GlobalDecl OtherGD;
+        // Check that GD is not yet in DiagnosedConflictingDefinitions is required
+        // to make sure that we issue an error only once.
+        if (lookupRepresentativeDecl(MangledName, OtherGD) &&
+            (GD.getCanonicalDecl().getDecl() !=
+             OtherGD.getCanonicalDecl().getDecl()) &&
+            DiagnosedConflictingDefinitions.insert(GD).second) {
+          getDiags().Report(D->getLocation(),
+                            diag::err_duplicate_mangled_name);
+          getDiags().Report(OtherGD.getDecl()->getLocation(),
+                            diag::note_previous_definition);
+        }
       }
+
     }
 
     if ((isa<llvm::Function>(Entry) || isa<llvm::GlobalAlias>(Entry)) &&
@@ -2449,7 +2619,7 @@ llvm::Constant *CodeGenModule::GetOrCreateLLVMFunction(
     // (If function is requested for a definition, we always need to create a new
     // function, not just return a bitcast.)
     if (!IsForDefinition)
-      return llvm::ConstantExpr::getBitCast(Entry, Ty->getPointerTo());
+      return llvm::ConstantExpr::getPointerCast(Entry, Ty->getPointerTo());
   }
 
   // This function doesn't have a complete type (for example, the return
@@ -2554,7 +2724,7 @@ llvm::Constant *CodeGenModule::GetOrCreateLLVMFunction(
   }
 
   llvm::Type *PTy = llvm::PointerType::getUnqual(Ty);
-  return llvm::ConstantExpr::getBitCast(F, PTy);
+  return llvm::ConstantExpr::getPointerCast(F, PTy);
 }
 
 /// GetAddrOfFunction - Return the address of the given function.  If Ty is
@@ -2688,7 +2858,7 @@ bool CodeGenModule::isTypeConstant(QualType Ty, bool ExcludeCtor) {
 /// GetOrCreateLLVMGlobal - If the specified mangled name is not in the module,
 /// create and return an llvm GlobalVariable with the specified type.  If there
 /// is something in the module with the specified name, return it potentially
-/// bitcasted to the right type.
+/// casted to the right type.
 ///
 /// If D is non-null, it specifies a decl that correspond to this.  This is used
 /// to set the attributes on the global when it is first created.
@@ -2739,14 +2909,10 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName,
       }
     }
 
-    // Make sure the result is of the correct type.
-    if (Entry->getType()->getAddressSpace() != Ty->getAddressSpace())
-      return llvm::ConstantExpr::getAddrSpaceCast(Entry, Ty);
-
     // (If global is requested for a definition, we always need to create a new
     // global, not just return a bitcast.)
     if (!IsForDefinition)
-      return llvm::ConstantExpr::getBitCast(Entry, Ty);
+      return llvm::ConstantExpr::getPointerCast(Entry, Ty);
   }
 
   auto AddrSpace = GetGlobalVarAddressSpace(D);
@@ -2764,7 +2930,7 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName,
 
     if (!Entry->use_empty()) {
       llvm::Constant *NewPtrForOldDecl =
-          llvm::ConstantExpr::getBitCast(GV, Entry->getType());
+          llvm::ConstantExpr::getPointerCast(GV, Entry->getType());
       Entry->replaceAllUsesWith(NewPtrForOldDecl);
     }
 
@@ -2935,7 +3101,7 @@ CodeGenModule::CreateOrReplaceCXXRuntimeVariable(StringRef Name,
 
     if (!OldGV->use_empty()) {
       llvm::Constant *NewPtrForOldDecl =
-      llvm::ConstantExpr::getBitCast(GV, OldGV->getType());
+      llvm::ConstantExpr::getPointerCast(GV, OldGV->getType());
       OldGV->replaceAllUsesWith(NewPtrForOldDecl);
     }
 
@@ -2963,8 +3129,7 @@ llvm::Constant *CodeGenModule::GetAddrOfGlobalVar(const VarDecl *D,
   if (!Ty)
     Ty = getTypes().ConvertTypeForMem(ASTTy);
 
-  llvm::PointerType *PTy =
-    llvm::PointerType::get(Ty, getContext().getTargetAddressSpace(ASTTy));
+  llvm::PointerType *PTy = llvm::PointerType::get(Ty, getContext().getTargetAddressSpace(ASTTy));
 
   StringRef MangledName = getMangledName(D);
   return GetOrCreateLLVMGlobal(MangledName, PTy, D, IsForDefinition);
@@ -3028,6 +3193,10 @@ LangAS CodeGenModule::GetGlobalVarAddressSpace(const VarDecl *D) {
     else
       return LangAS::cuda_device;
   }
+
+  if (LangOpts.CPlusPlusAMP && LangOpts.DevicePath &&
+      D && D->hasAttr<HCCTileStaticAttr>())
+    return LangAS::hcc_tilestatic;
 
   return getTargetCodeGenInfo().getGlobalVarAddressSpace(*this, D);
 }
@@ -3128,6 +3297,9 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
   if (getLangOpts().CUDA && getLangOpts().CUDAIsDevice &&
       D->hasAttr<CUDASharedAttr>())
     Init = llvm::UndefValue::get(getTypes().ConvertType(ASTTy));
+  else if (getLangOpts().CPlusPlusAMP && getLangOpts().DevicePath &&
+           D->hasAttr<HCCTileStaticAttr>())
+    Init = llvm::UndefValue::get(getTypes().ConvertType(ASTTy));
   else if (!InitExpr) {
     // This is a tentative definition; tentative definitions are
     // implicitly initialized with { 0 }.
@@ -3204,7 +3376,7 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
 
     // Replace all uses of the old global with the new global
     llvm::Constant *NewPtrForOldDecl =
-        llvm::ConstantExpr::getBitCast(GV, Entry->getType());
+        llvm::ConstantExpr::getPointerCast(GV, Entry->getType());
     Entry->replaceAllUsesWith(NewPtrForOldDecl);
 
     // Erase the old global, since it is no longer used.
@@ -3610,9 +3782,17 @@ void CodeGenModule::EmitGlobalFunctionDefinition(GlobalDecl GD,
                                                    /*DontDefer=*/true,
                                                    ForDefinition));
 
-  // Already emitted.
-  if (!GV->isDeclaration())
-    return;
+  if (D->getAttr<CXXAMPRestrictAMPAttr>()) {
+    cast<llvm::Function>(GV)->addFnAttr("HC");
+  }
+
+  // Relax the rule for C++AMP
+  if (!LangOpts.CPlusPlusAMP) {
+    // Already emitted.
+    if (!GV->isDeclaration()) {
+      return;
+    }
+  }
 
   // We need to set linkage and visibility on the function before
   // generating code for it because various parts of IR generation
@@ -3698,7 +3878,7 @@ void CodeGenModule::EmitAliasDefinition(GlobalDecl GD) {
     // Remove it and replace uses of it with the alias.
     GA->takeName(Entry);
 
-    Entry->replaceAllUsesWith(llvm::ConstantExpr::getBitCast(GA,
+    Entry->replaceAllUsesWith(llvm::ConstantExpr::getPointerCast(GA,
                                                           Entry->getType()));
     Entry->eraseFromParent();
   } else {
@@ -3916,7 +4096,7 @@ CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
 
   if (isUTF16)
     // Cast the UTF16 string to the correct type.
-    Str = llvm::ConstantExpr::getBitCast(Str, Int8PtrTy);
+    Str = llvm::ConstantExpr::getPointerCast(Str, Int8PtrTy);
   Fields.add(Str);
 
   // String length.
@@ -4028,9 +4208,13 @@ GenerateStringLiteral(llvm::Constant *C, llvm::GlobalValue::LinkageTypes LT,
                       CodeGenModule &CGM, StringRef GlobalName,
                       CharUnits Alignment) {
   // OpenCL v1.2 s6.5.3: a string literal is in the constant address space.
-  unsigned AddrSpace = 0;
+  LangAS ASTAddrSpace;
   if (CGM.getLangOpts().OpenCL)
-    AddrSpace = CGM.getContext().getTargetAddressSpace(LangAS::opencl_constant);
+    ASTAddrSpace = LangAS::opencl_constant;
+  else
+    ASTAddrSpace =
+        CGM.getTarget().getConstantAddressSpace().getValueOr(LangAS::Default);
+  unsigned AddrSpace = CGM.getContext().getTargetAddressSpace(ASTAddrSpace);
 
   llvm::Module &M = CGM.getModule();
   // Create a global variable for this string
@@ -4358,6 +4542,9 @@ void CodeGenModule::EmitDeclContext(const DeclContext *DC) {
 
 /// EmitTopLevelDecl - Emit code for a single top level declaration.
 void CodeGenModule::EmitTopLevelDecl(Decl *D) {
+  if (getenv("DBG_CG_DECL")) {
+    llvm::errs() << "decl: "; D->dump();
+  }
   // Ignore dependent declarations.
   if (D->isTemplated())
     return;

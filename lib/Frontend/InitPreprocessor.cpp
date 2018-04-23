@@ -562,16 +562,35 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   // Compiler version introspection macros.
   Builder.defineMacro("__llvm__");  // LLVM Backend
   Builder.defineMacro("__clang__"); // Clang Frontend
+
+  // hcc macros
+  Builder.defineMacro("__KALMAR_CC__", "1");
+  Builder.defineMacro("__HCC__", "1");
+
 #define TOSTR2(X) #X
 #define TOSTR(X) TOSTR2(X)
   Builder.defineMacro("__clang_major__", TOSTR(CLANG_VERSION_MAJOR));
   Builder.defineMacro("__clang_minor__", TOSTR(CLANG_VERSION_MINOR));
   Builder.defineMacro("__clang_patchlevel__", TOSTR(CLANG_VERSION_PATCHLEVEL));
-#undef TOSTR
-#undef TOSTR2
   Builder.defineMacro("__clang_version__",
                       "\"" CLANG_VERSION_STRING " "
                       + getClangFullRepositoryVersion() + "\"");
+
+  // hcc version macros
+  Builder.defineMacro("__hcc_major__", TOSTR(HCC_VERSION_MAJOR));
+  Builder.defineMacro("__hcc_minor__", TOSTR(HCC_VERSION_MINOR));
+  Builder.defineMacro("__hcc_patchlevel__", TOSTR(HCC_VERSION_PATCH));
+  Builder.defineMacro("__hcc_version__", TOSTR(HCC_VERSION_STRING));
+  Builder.defineMacro("__hcc_workweek__", TOSTR(HCC_VERSION_WORKWEEK));
+
+  // hcc backend macro. possible values are:
+  // - CL : for non-HSA systems
+  // - HLC : for HLC backend
+  // - AMDGPU : for Lightning backend
+  Builder.defineMacro("__hcc_backend__", TOSTR(KALMAR_BACKEND));
+
+#undef TOSTR
+#undef TOSTR2
   if (!LangOpts.MSVCCompat) {
     // Currently claim to be compatible with GCC 4.2.1-5621, but only if we're
     // not compiling for MSVC compatibility
@@ -1091,7 +1110,7 @@ void clang::InitializePreprocessor(
   if (InitOpts.UsePredefines) {
     // FIXME: This will create multiple definitions for most of the predefined
     // macros. This is not the right way to handle this.
-    if ((LangOpts.CUDA || LangOpts.OpenMPIsDevice) && PP.getAuxTargetInfo())
+    if ((LangOpts.CUDA || LangOpts.CPlusPlusAMP) && PP.getAuxTargetInfo())
       InitializePredefinedMacros(*PP.getAuxTargetInfo(), LangOpts, FEOpts,
                                  Builder);
 

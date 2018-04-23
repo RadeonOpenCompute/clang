@@ -661,6 +661,8 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   Opts.PreserveAsmComments = !Args.hasArg(OPT_fno_preserve_as_comments);
   Opts.AssumeSaneOperatorNew = !Args.hasArg(OPT_fno_assume_sane_operator_new);
   Opts.ObjCAutoRefCountExceptions = Args.hasArg(OPT_fobjc_arc_exceptions);
+  Opts.AMPIsDevice = Args.hasArg(OPT_famp_is_device);
+  Opts.AMPCPU = Args.hasArg(OPT_famp_cpu);
   Opts.CXAAtExit = !Args.hasArg(OPT_fno_use_cxa_atexit);
   Opts.RegisterGlobalDtorsWithAtExit =
       Args.hasArg(OPT_fregister_global_dtors_with_atexit);
@@ -1607,6 +1609,10 @@ static InputKind ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
                 .Case("cl", InputKind::OpenCL)
                 .Case("cuda", InputKind::CUDA)
                 .Case("c++", InputKind::CXX)
+      .Case("c++amp-kernel", InputKind::CXXAMP) // C++ AMP support
+      .Case("hc-kernel", InputKind::CXXAMP) // HC support
+      .Case("hc-host", InputKind::CXXAMP) // HC support
+      .Case("c++amp-kernel-cpu", InputKind::CXXAMP) // C++ AMP support
                 .Case("objective-c", InputKind::ObjC)
                 .Case("objective-c++", InputKind::ObjCXX)
                 .Case("renderscript", InputKind::RenderScript)
@@ -1874,6 +1880,7 @@ void CompilerInvocation::setLangDefaults(LangOptions &Opts, InputKind IK,
       LangStd = LangStandard::lang_gnu11;
 #endif
       break;
+    case InputKind::CXXAMP:
     case InputKind::CXX:
     case InputKind::ObjCXX:
 #if defined(CLANG_DEFAULT_STD_CXX)
@@ -1903,6 +1910,7 @@ void CompilerInvocation::setLangDefaults(LangOptions &Opts, InputKind IK,
   Opts.GNUInline = !Opts.C99 && !Opts.CPlusPlus;
   Opts.HexFloats = Std.hasHexFloats();
   Opts.ImplicitInt = Std.hasImplicitInt();
+  Opts.CPlusPlusAMP |= Std.isCPlusPlusAMP();
 
   // Set OpenCL Version.
   Opts.OpenCL = Std.isOpenCL();
@@ -1995,12 +2003,18 @@ static bool IsInputCompatibleWithStandard(InputKind IK,
 
   case InputKind::CXX:
   case InputKind::ObjCXX:
-    return S.getLanguage() == InputKind::CXX;
+    return S.getLanguage() == InputKind::CXX ||
+           S.getLanguage() == InputKind::CXXAMP;
+
+  case InputKind::CXXAMP:
+    return S.getLanguage() == InputKind::CXXAMP ||
+           S.getLanguage() == InputKind::CXX;
 
   case InputKind::CUDA:
     // FIXME: What -std= values should be permitted for CUDA compilations?
     return S.getLanguage() == InputKind::CUDA ||
-           S.getLanguage() == InputKind::CXX;
+           S.getLanguage() == InputKind::CXX ||
+           S.getLanguage() == InputKind::CXXAMP;
 
   case InputKind::Asm:
     // Accept (and ignore) all -std= values.
@@ -2025,6 +2039,8 @@ static const StringRef GetInputKindName(InputKind IK) {
     return "Objective-C++";
   case InputKind::OpenCL:
     return "OpenCL";
+  case InputKind::CXXAMP:
+    return "C++AMP";
   case InputKind::CUDA:
     return "CUDA";
   case InputKind::RenderScript:
@@ -2122,6 +2138,15 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
 
   llvm::Triple T(TargetOpts.Triple);
   CompilerInvocation::setLangDefaults(Opts, IK, T, PPOpts, LangStd);
+
+  // Add AMP features if we got -famp.
+  Opts.CPlusPlusAMP |= Args.hasArg(options::OPT_famp);
+
+  // Add AMP features if using AMP.
+  if (Opts.CPlusPlusAMP) {
+    Opts.NativeHalfType = 1;
+    Opts.NativeHalfArgsAndReturns = 1;
+  }
 
   // -cl-strict-aliasing needs to emit diagnostic in the case where CL > 1.0.
   // This option should be deprecated for CL > 1.0 because
@@ -2602,6 +2627,19 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
           << Opts.OMPHostIRFile;
   }
 
+  // C++ AMP: Decide host path or device path
+  Opts.DevicePath = Args.hasArg(OPT_famp_is_device);
+  Opts.AMPCPU = Args.hasArg(OPT_famp_cpu);
+  Opts.HSAExtension = Args.hasArg(OPT_fhsa_extension);
+
+  // rules for auto-auto:
+  // disabled by default, or explicitly disabled by -fno-auto-auto
+  // enabled by -fauto-auto
+  Opts.AutoAuto = Args.hasArg(OPT_fauto_auto) && !Args.hasArg(OPT_fno_auto_auto);
+
+  // rules for auto-compile-for-accelerator:
+  Opts.AutoCompileForAccelerator = Args.hasArg(OPT_fauto_compile_for_accelerator);
+
   // set CUDA mode for OpenMP target NVPTX if specified in options
   Opts.OpenMPCUDAMode = Opts.OpenMPIsDevice && T.isNVPTX() &&
                         Args.hasArg(options::OPT_fopenmp_cuda_mode);
@@ -2978,9 +3016,13 @@ bool CompilerInvocation::CreateFromArgs(CompilerInvocation &Res,
       Res.getTargetOpts().HostTriple = Res.getFrontendOpts().AuxTriple;
   }
 
-  // Set the triple of the host for OpenMP device compile.
-  if (LangOpts.OpenMPIsDevice)
-    Res.getTargetOpts().HostTriple = Res.getFrontendOpts().AuxTriple;
+  if (LangOpts.CPlusPlusAMP) {
+    // During HCC device-side compilation, the aux triple is the
+    // triple used for host compilation
+    if (LangOpts.DevicePath) {
+      Res.getTargetOpts().HostTriple = Res.getFrontendOpts().AuxTriple;
+    }
+  }
 
   // FIXME: Override value name discarding when asan or msan is used because the
   // backend passes depend on the name of the alloca in order to print out

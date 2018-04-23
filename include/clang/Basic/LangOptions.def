@@ -208,6 +208,13 @@ LANGOPT(CUDADeviceFlushDenormalsToZero, 1, 0, "flushing denormals to zero")
 LANGOPT(CUDADeviceApproxTranscendentals, 1, 0, "using approximate transcendental functions")
 LANGOPT(CUDARelocatableDeviceCode, 1, 0, "generate relocatable device code")
 
+LANGOPT(CPlusPlusAMP      , 1, 0, "C++AMP")
+LANGOPT(DevicePath        , 1, 0, "C++AMP Device Path")
+LANGOPT(AMPCPU            , 1, 0, "C++AMP CPU Path")
+LANGOPT(HSAExtension      , 1, 0, "C++AMP Extension for HSA")
+LANGOPT(AutoAuto          , 1, 0, "Enable auto-auto")
+LANGOPT(AutoCompileForAccelerator, 1, 0, "Enable auto-compile-for-accelerator")
+
 LANGOPT(SizedDeallocation , 1, 0, "sized deallocation")
 LANGOPT(AlignedAllocation , 1, 0, "aligned allocation")
 LANGOPT(AlignedAllocationUnavailable, 1, 0, "aligned allocation functions are unavailable")

@@ -1469,7 +1469,7 @@ Address CGOpenMPRuntime::getOrCreateDefaultLocation(unsigned Flags) {
       DefaultOpenMPPSource =
           CGM.GetAddrOfConstantCString(";unknown;unknown;0;0;;").getPointer();
       DefaultOpenMPPSource =
-          llvm::ConstantExpr::getBitCast(DefaultOpenMPPSource, CGM.Int8PtrTy);
+          llvm::ConstantExpr::getPointerCast(DefaultOpenMPPSource, CGM.Int8PtrTy);
     }
 
     llvm::Constant *Data[] = {llvm::ConstantInt::getNullValue(CGM.Int32Ty),
@@ -6212,7 +6212,7 @@ void CGOpenMPRuntime::emitTargetOutlinedFunctionHelper(
   // the device, because these functions will be entry points to the device.
 
   if (CGM.getLangOpts().OpenMPIsDevice) {
-    OutlinedFnID = llvm::ConstantExpr::getBitCast(OutlinedFn, CGM.Int8PtrTy);
+    OutlinedFnID = llvm::ConstantExpr::getPointerCast(OutlinedFn, CGM.Int8PtrTy);
     OutlinedFn->setLinkage(llvm::GlobalValue::ExternalLinkage);
     OutlinedFn->setDSOLocal(false);
   } else {

@@ -231,9 +231,10 @@ llvm::Constant *CodeGenModule::getOrCreateStaticVarDecl(
 
   // OpenCL variables in local address space and CUDA shared
   // variables cannot have an initializer.
+  // HCC tile_static variables cannot have an initializer.
   llvm::Constant *Init = nullptr;
   if (Ty.getAddressSpace() == LangAS::opencl_local ||
-      D.hasAttr<CUDASharedAttr>())
+      D.hasAttr<CUDASharedAttr>() || D.hasAttr<HCCTileStaticAttr>())
     Init = llvm::UndefValue::get(LTy);
   else
     Init = EmitNullConstant(Ty);
@@ -253,6 +254,12 @@ llvm::Constant *CodeGenModule::getOrCreateStaticVarDecl(
 
   // Make sure the result is of the correct type.
   LangAS ExpectedAS = Ty.getAddressSpace();
+
+  // HCC tile_static pointer would be in generic address space
+  if (D.hasAttr<HCCTileStaticAttr>()) {
+    ExpectedAS = LangAS::hcc_generic;
+  }
+
   llvm::Constant *Addr = GV;
   if (AS != ExpectedAS) {
     Addr = getTargetCodeGenInfo().performAddrSpaceCast(
@@ -403,8 +410,10 @@ void CodeGenFunction::EmitStaticVarDecl(const VarDecl &D,
   // a no-op and should not be emitted.
   bool isCudaSharedVar = getLangOpts().CUDA && getLangOpts().CUDAIsDevice &&
                          D.hasAttr<CUDASharedAttr>();
+  bool isHCCAcceleratorPath =
+      getLangOpts().CPlusPlusAMP && getLangOpts().DevicePath;
   // If this value has an initializer, emit it.
-  if (D.getInit() && !isCudaSharedVar)
+  if (D.getInit() && !isCudaSharedVar && !isHCCAcceleratorPath)
     var = AddInitializerToStaticVarDecl(D, var);
 
   var->setAlignment(alignment.getQuantity());
@@ -1213,6 +1222,18 @@ CodeGenFunction::EmitAutoVarAlloca(const VarDecl &D) {
     EmitAndRegisterVariableArrayDimensions(DI, D, EmitDebugInfo);
   }
 
+  auto T = D.getType();
+  assert(T.getAddressSpace() == LangAS::Default ||
+         T.getAddressSpace() == LangAS::opencl_private);
+  if (getASTAllocaAddressSpace() != LangAS::Default) {
+    auto *Addr = getTargetHooks().performAddrSpaceCast(
+        *this, address.getPointer(), getASTAllocaAddressSpace(),
+        T.getAddressSpace(),
+        address.getElementType()->getPointerTo(
+            getContext().getTargetAddressSpace(T.getAddressSpace())),
+        /*non-null*/ true);
+    address = Address(Addr, address.getAlignment());
+  }
   setAddrOfLocalVar(&D, address);
   emission.Addr = address;
 
@@ -1376,7 +1397,7 @@ void CodeGenFunction::EmitAutoVarInit(const AutoVarEmission &emission) {
 
   llvm::Type *BP = AllocaInt8PtrTy;
   if (Loc.getType() != BP)
-    Loc = Builder.CreateBitCast(Loc, BP);
+    Loc = Builder.CreatePointerBitCastOrAddrSpaceCast(Loc, BP);
 
   // If the initializer is all or mostly zeros, codegen with memset then do
   // a few stores afterward.
@@ -1396,7 +1417,7 @@ void CodeGenFunction::EmitAutoVarInit(const AutoVarEmission &emission) {
     // memcpy from the global to the alloca.
     std::string Name = getStaticDeclName(CGM, D);
     unsigned AS = 0;
-    if (getLangOpts().OpenCL) {
+    if (getLangOpts().OpenCL || getLangOpts().CPlusPlusAMP) {
       AS = CGM.getContext().getTargetAddressSpace(LangAS::opencl_constant);
       BP = llvm::PointerType::getInt8PtrTy(getLLVMContext(), AS);
     }
@@ -1935,6 +1956,7 @@ void CodeGenFunction::EmitParmDecl(const VarDecl &D, ParamValue Arg,
     llvm::Type *IRTy = ConvertTypeForMem(Ty)->getPointerTo(AS);
     if (DeclPtr.getType() != IRTy)
       DeclPtr = Builder.CreateBitCast(DeclPtr, IRTy, D.getName());
+
     // Indirect argument is in alloca address space, which may be different
     // from the default address space.
     auto AllocaAS = CGM.getASTAllocaAddressSpace();

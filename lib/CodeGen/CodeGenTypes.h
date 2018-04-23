@@ -184,6 +184,13 @@ public:
   /// ConvertType - Convert type T into a llvm::Type.
   llvm::Type *ConvertType(QualType T);
 
+  /// Get a pointer type pointing to the given QualType \p T.
+  llvm::PointerType *getPointerTypeTo(QualType T = QualType());
+
+  /// Get a pointer type pointing to the given llvm::Type \p T in the default
+  /// target address space.
+  llvm::PointerType *getDefaultPointerTo(llvm::Type *T);
+
   /// \brief Converts the GlobalDecl into an llvm::Type. This should be used
   /// when we know the target of the function we want to convert.  This is
   /// because some functions (explicitly, those with pass_object_size
@@ -197,6 +204,9 @@ public:
   /// a type.  For example, the scalar representation for _Bool is i1, but the
   /// memory representation is usually i8 or i32, depending on the target.
   llvm::Type *ConvertTypeForMem(QualType T);
+
+  /// Get the LLVM pointer type of a variable.
+  llvm::PointerType *getVariableType(VarDecl D);
 
   /// GetFunctionType - Get the LLVM function type for \arg Info.
   llvm::FunctionType *GetFunctionType(const CGFunctionInfo &Info);

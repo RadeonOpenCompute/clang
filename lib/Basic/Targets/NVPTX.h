@@ -34,6 +34,9 @@ static const unsigned NVPTXAddrSpaceMap[] = {
     1, // cuda_device
     4, // cuda_constant
     3, // cuda_shared
+    3, // hcc_tilestatic
+    0, // hcc_generic
+    1, // hcc_global
 };
 
 class LLVM_LIBRARY_VISIBILITY NVPTXTargetInfo : public TargetInfo {
